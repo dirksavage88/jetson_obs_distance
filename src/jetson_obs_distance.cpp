@@ -18,6 +18,8 @@ class JetsonAvoidance :  public rclcpp::Node
     rmw_qos_profile_t sens_qos_profile = rmw_qos_profile_sensor_data;
 
     auto qos = rclcpp::QoS(rclcpp::QoSInitialization(sens_qos_profile.history, 5), sens_qos_profile);
+    // Declare parameter for i2c bus on jetson (usually 0, 1, or 7)
+    this->declare_parameter("i2c_bus", 1);
 
     // Fill the publisher
     _obs_distance_msg = this->create_publisher<px4_msgs::msg::ObstacleDistance>("/fmu/in/obstacle_distance", 10);
@@ -27,10 +29,17 @@ class JetsonAvoidance :  public rclcpp::Node
     // Always have a backup in case we aren't timesynced to PX4 time
     _sensor_time_start = std::chrono::steady_clock::now();
     
+    // Get the i2c bus
+    _i2c_bus = this->get_parameter("i2c_bus").as_int();
     // Configure the VL53L5CX
     SensorInit();
 
-    _timer = this->create_wall_timer(std::chrono::milliseconds(15), std::bind(&JetsonAvoidance::DistanceReadCB, this));
+    // only create wall timer if sensor init was successful
+     if(_return_status == 0) {
+     
+    	_timer = this->create_wall_timer(std::chrono::milliseconds(15), std::bind(&JetsonAvoidance::DistanceReadCB, this));
+     }
+
   }
 
   private:
@@ -64,17 +73,22 @@ class JetsonAvoidance :  public rclcpp::Node
     uint8_t _ranging_started{0};
     float _confidence_score{100};
     uint8_t _signal_qual[8];
+    int _i2c_bus{1};
 };
 
 void JetsonAvoidance::SensorInit()
 {
 
+  
   while(!_ranging_started) {
-    _return_status = vl53l5cx_comms_init(&_config.platform, 1);
+    _return_status = vl53l5cx_comms_init(&_config.platform, static_cast<char>(_i2c_bus));
 
       if(_return_status != 0) {
 
         RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device not connected");
+	_return_status = 1;
+	// Exit the sensor init loop
+	break;
 
       } else {
         _return_status = vl53l5cx_is_alive(&_config, &_is_active);
@@ -83,19 +97,20 @@ void JetsonAvoidance::SensorInit()
           RCLCPP_WARN(this->get_logger(), "WARNING: VL53L5CX device not alive");
         }
 
-        _return_status = vl53l5cx_init(&_config);
+        _return_status |= vl53l5cx_init(&_config);
 	      
 	      if(_return_status != 0){
 
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device init failed");
 	      }
-        _return_status = vl53l5cx_set_resolution(&_config, VL53L5CX_RESOLUTION_8X8);
+        _return_status |= vl53l5cx_set_resolution(&_config, VL53L5CX_RESOLUTION_8X8);
 
         if(_return_status != 0) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX resolution not set");
+	  
         } else {
-          _return_status = vl53l5cx_set_ranging_frequency_hz(&_config, 30);
-          _return_status = vl53l5cx_start_ranging(&_config);
+          _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 30);
+          _return_status |= vl53l5cx_start_ranging(&_config);
           vl53l5cx_check_data_ready(&_config, &_data_ready);
           //RCLCPP_INFO(this->get_logger(), "VL53L5CX checking data ready");
       	  _ranging_started = 1;
@@ -176,7 +191,7 @@ void JetsonAvoidance::DistanceReadCB() {
     }
     
     // In 8x8 ranging mode the FoV is 60 degrees
-    obs.angle_offset = 30.0f;
+    obs.angle_offset = -30.0f;
     obs.increment = 8.0f;
    
     // Coordinate frame is body FRD
