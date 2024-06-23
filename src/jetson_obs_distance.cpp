@@ -71,7 +71,6 @@ class JetsonAvoidance :  public rclcpp::Node
     uint8_t _return_status{0};
     uint8_t _is_active{0};
     uint8_t _data_ready{0};
-    uint8_t _ranging_started{0};
     uint8_t _init_retries{5};
     float _confidence_score{100};
     uint8_t _signal_qual[8];
@@ -164,27 +163,23 @@ void JetsonAvoidance::SensorInit()
 
       case SensorState::RangingActive:
           vl53l5cx_check_data_ready(&_config, &_data_ready);
-      	  _ranging_started = 1;
           sensor_status = SensorState::InitComplete;
+          RCLCPP_INFO(this->get_logger(), "VL53L5CX Init Complete");
           break;
 
       case SensorState::Failure:
-	--_init_retries; 
-	if(_init_retries == 0) {
+	      --_init_retries; 
+	      if(_init_retries == 0) {
           // Exit the main init loop
           return;
-	}
-	// Retry from the uninit state
-	sensor_status = SensorState::Uninitialized;
-	break;
-      
-      case SensorState::InitComplete:
-        RCLCPP_INFO(this->get_logger(), "VL53L5CX Init Complete");
-        break;
+	      }
+	      // Retry from the uninit state
+	      sensor_status = SensorState::Uninitialized;
+	      break;
 
-    }
+    }// End switch
 
-  }
+  }// End while
 
 }
 
