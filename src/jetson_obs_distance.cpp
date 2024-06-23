@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <cmath>
 #include "vl53l5cx_api.hpp"
+#include "jetson_obs_distance.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <px4_msgs/msg/distance_sensor.hpp>
 #include <px4_msgs/msg/obstacle_distance.hpp>
@@ -71,6 +72,7 @@ class JetsonAvoidance :  public rclcpp::Node
     uint8_t _is_active{0};
     uint8_t _data_ready{0};
     uint8_t _ranging_started{0};
+    uint8_t _init_retries{5};
     float _confidence_score{100};
     uint8_t _signal_qual[8];
     int _i2c_bus{1};
@@ -78,47 +80,114 @@ class JetsonAvoidance :  public rclcpp::Node
 
 void JetsonAvoidance::SensorInit()
 {
+  SensorState sensor_status = SensorState::Uninitialized;
 
-  
-  while(!_ranging_started) {
-    _return_status = vl53l5cx_comms_init(&_config.platform, static_cast<char>(_i2c_bus));
+  while(sensor_status != SensorState::InitComplete) {
 
-      if(_return_status != 0) {
+    switch(sensor_status) {
 
-        RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device not connected");
-	_return_status = 1;
-	// Exit the sensor init loop
-	break;
+      case SensorState::Uninitialized:
+        _return_status = vl53l5cx_comms_init(&_config.platform, static_cast<char>(_i2c_bus));
 
-      } else {
+        if(_return_status != 0) {
+
+          RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device not connected");
+	        _return_status = 1;
+	        // Exit and retry
+          sensor_status = SensorState::Failure;
+	        break;
+	      }
+
+	      sensor_status = SensorState::CommsInit;
+	      break;
+
+      case SensorState::CommsInit:
         _return_status = vl53l5cx_is_alive(&_config, &_is_active);
         
         if(!_is_active || (_return_status != 0)) {
-          RCLCPP_WARN(this->get_logger(), "WARNING: VL53L5CX device not alive");
+          RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device not responding");
+	        // Exit and retry
+          sensor_status = SensorState::Failure;
+          break;
         }
 
+        sensor_status = SensorState::CheckAlive;
+        break;
+
+      case SensorState::CheckAlive:
         _return_status |= vl53l5cx_init(&_config);
 	      
 	      if(_return_status != 0){
-
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device init failed");
+	        // Exit and retry
+          sensor_status = SensorState::Failure;
+          break;
 	      }
+
+	      sensor_status = SensorState::Init;
+	      break;
+
+      case SensorState::Init:
         _return_status |= vl53l5cx_set_resolution(&_config, VL53L5CX_RESOLUTION_8X8);
 
         if(_return_status != 0) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX resolution not set");
-	  
-        } else {
-          _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 30);
-          _return_status |= vl53l5cx_start_ranging(&_config);
-          vl53l5cx_check_data_ready(&_config, &_data_ready);
-          //RCLCPP_INFO(this->get_logger(), "VL53L5CX checking data ready");
-      	  _ranging_started = 1;
+	        // Exit and retry
+          sensor_status = SensorState::Failure;
         }
-      }
+        sensor_status = SensorState::SetRes;
+        break;
+      
+      // Set the sensor resolution (8x8)
+      case SensorState::SetRes:
+        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 30);
+        if(_return_status != 0) {
+          RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX frequency not set");
+	        // Exit and retry
+          sensor_status = SensorState::Failure;
+          break;
+        }
+        sensor_status = SensorState::SetFreq;
+        break;
+      
+      // Set the sensor frequency
+      case SensorState::SetFreq:
+        _return_status |= vl53l5cx_start_ranging(&_config);
+        if(_return_status != 0) {
+          RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX ranging failed");
+	        // Exit and retry
+          sensor_status = SensorState::Failure;
+          break;
+        }
+        sensor_status = SensorState::RangingActive;
+        break;
+
+      case SensorState::RangingActive:
+          vl53l5cx_check_data_ready(&_config, &_data_ready);
+      	  _ranging_started = 1;
+          sensor_status = SensorState::InitComplete;
+          break;
+
+      case SensorState::Failure:
+	--_init_retries; 
+	if(_init_retries == 0) {
+          // Exit the main init loop
+          return;
+	}
+	// Retry from the uninit state
+	sensor_status = SensorState::Uninitialized;
+	break;
+      
+      case SensorState::InitComplete:
+        RCLCPP_INFO(this->get_logger(), "VL53L5CX Init Complete");
+        break;
+
     }
 
+  }
+
 }
+
 void JetsonAvoidance::TimeSyncCB(const px4_msgs::msg::TimesyncStatus::UniquePtr msg) {
   _synced_ts = msg->timestamp;
   _synced = true;  
@@ -131,8 +200,6 @@ void JetsonAvoidance::DistanceReadCB() {
   auto sensor_time_end = std::chrono::steady_clock::now();
 
   vl53l5cx_check_data_ready(&_config, &_data_ready);
-  
-  RCLCPP_INFO(this->get_logger(), "VL53L5CX reading results...");
   
   // Collect ranging results array from the VL53L5CX
   if(_data_ready) {
