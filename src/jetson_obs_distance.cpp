@@ -61,13 +61,18 @@ class JetsonAvoidance :  public rclcpp::Node
     // Timestamp of the node starting
     std::chrono::_V2::steady_clock::time_point _sensor_time_start; 
 
-    bool _synced;
-    uint64_t _synced_ts;
     // VL53L5CX configuration & results struct
     VL53L5CX_Configuration _config;
     
     VL53L5CX_ResultsData _results;
-
+    
+    // Constants
+    const uint16_t UINT16_MAX{65535};
+    const uint8_t OBS_DISTANCE_MAX{72};
+    
+    // Member variables
+    bool _synced;
+    uint64_t _synced_ts;
     uint8_t _return_status{0};
     uint8_t _is_active{0};
     uint8_t _data_ready{0};
@@ -189,7 +194,7 @@ void JetsonAvoidance::TimeSyncCB(const px4_msgs::msg::TimesyncStatus::UniquePtr 
 
 }
 void JetsonAvoidance::DistanceReadCB() {
-
+  uint16_t distance_val;
   uint8_t distance_indx = 0;
   px4_msgs::msg::ObstacleDistance obs;
   auto sensor_time_end = std::chrono::steady_clock::now();
@@ -197,6 +202,7 @@ void JetsonAvoidance::DistanceReadCB() {
   vl53l5cx_check_data_ready(&_config, &_data_ready);
   
   // Collect ranging results array from the VL53L5CX
+
   if(_data_ready) {
     vl53l5cx_get_ranging_data(&_config, &_results);
     // Extract the middle row since this is a 3D rangefinder, but PX4 obstacle dist array is 2D
@@ -204,42 +210,50 @@ void JetsonAvoidance::DistanceReadCB() {
 
       distance_indx = 39 - index;
 
-      uint16_t distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
-      obs.distances[distance_indx] = distance_val;
+      // Determine the signal quality first, then read the ranging result (or set to UINT16_MAX)
       _signal_qual[distance_indx] = _results.target_status[VL53L5CX_NB_TARGET_PER_ZONE*index];
     
       switch(_signal_qual[distance_indx]) {
         // Range valid
 	case 5:
 	    _confidence_score = 100;
-            RCLCPP_INFO(this->get_logger(), "Target detected");
+           RCLCPP_INFO(this->get_logger(), "Target detected");
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	    break;
 
 	// No targets detected, range valid
 	case 255:
 	    _confidence_score = 100;
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	    break;
 	
 	// No previous target detected, range valid
 	case 10:
 	    _confidence_score = 100;
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	    break;
 	// Wrap around not performed (first range)
 	case 6:
 	    _confidence_score = 50;
-            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
+           RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	    break;
 	// Range valid with large pulse
 	case 9:
 	    _confidence_score = 50;
-            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
+           RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	    break;
 	// Range quality poor
 	default:
 	    _confidence_score = 0;
-            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality invalid: %hhu", _signal_qual[distance_indx]);
+           RCLCPP_WARN(this->get_logger(), "WARNING: Range quality invalid: %hhu", _signal_qual[distance_indx]);
+           distance_val = UINT16_MAX;
 	    break;
       } // End switch
+
+      // Publish the results to the array
+      obs.distances[distance_indx] = distance_val;
     } // End for
 
     // Check if we are subscribed to PX4 timesync
@@ -251,7 +265,12 @@ void JetsonAvoidance::DistanceReadCB() {
   
         RCLCPP_WARN(this->get_logger(), "WARNING: Not time synced with FMU");
     }
-    
+
+    // Set the distances outside of the sensor field of view as "unknown/not used"
+    for (uint8_t i = 9; i < OBS_DISTANCE_MAX; ++i){
+      obs.distances[i] = UINT16_MAX;
+
+    }
     // In 8x8 ranging mode the FoV is 60 degrees
     obs.angle_offset = -30.0f;
     obs.increment = 8.0f;
