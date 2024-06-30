@@ -21,7 +21,7 @@ class JetsonAvoidance :  public rclcpp::Node
     auto qos = rclcpp::QoS(rclcpp::QoSInitialization(sens_qos_profile.history, 5), sens_qos_profile);
     // Declare parameter for i2c bus on jetson (usually 0, 1, or 7)
     this->declare_parameter("i2c_bus", 1);
-
+    
     // Fill the publisher
     _obs_distance_msg = this->create_publisher<px4_msgs::msg::ObstacleDistance>("/fmu/in/obstacle_distance", 10);
 
@@ -67,8 +67,8 @@ class JetsonAvoidance :  public rclcpp::Node
     VL53L5CX_ResultsData _results;
     
     // Constants
-    const uint16_t UINT16_MAX{65535};
-    const uint8_t OBS_DISTANCE_MAX{72};
+    const uint16_t _UINT16_MAX{65535};
+    const uint8_t _OBS_DISTANCE_MAX{72};
     
     // Member variables
     bool _synced;
@@ -201,6 +201,11 @@ void JetsonAvoidance::DistanceReadCB() {
 
   vl53l5cx_check_data_ready(&_config, &_data_ready);
   
+  // Set the distances outside of the sensor field of view as "unknown/not used"
+  for (uint8_t i = 8; i < _OBS_DISTANCE_MAX; ++i){
+    obs.distances[i] = _UINT16_MAX;
+
+  }
   // Collect ranging results array from the VL53L5CX
 
   if(_data_ready) {
@@ -223,35 +228,42 @@ void JetsonAvoidance::DistanceReadCB() {
 
 	// No targets detected, range valid
 	case 255:
-	    _confidence_score = 100;
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+	    _confidence_score = 75;
+ 	    distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	    break;
 	
 	// No previous target detected, range valid
 	case 10:
 	    _confidence_score = 100;
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+            distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	    break;
 	// Wrap around not performed (first range)
 	case 6:
-	    _confidence_score = 50;
+	   _confidence_score = 50;
            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
-	    break;
+           distance_val = _UINT16_MAX;
+   	   //distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+	   break;
 	// Range valid with large pulse
 	case 9:
-	    _confidence_score = 50;
+	   _confidence_score = 50;
            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
-	    break;
+           //distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+           distance_val = _UINT16_MAX;
+	   break;
 	// Range quality poor
 	default:
-	    _confidence_score = 0;
+	   _confidence_score = 0;
            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality invalid: %hhu", _signal_qual[distance_indx]);
-           distance_val = UINT16_MAX;
-	    break;
+           distance_val = _UINT16_MAX;
+	   break;
       } // End switch
 
+      // Invalidate (set to unknown) if distance value returns 0 m range
+      if (distance_val == 0) {
+      	distance_val = _UINT16_MAX;
+      }
+      
       // Publish the results to the array
       obs.distances[distance_indx] = distance_val;
     } // End for
@@ -266,11 +278,7 @@ void JetsonAvoidance::DistanceReadCB() {
         RCLCPP_WARN(this->get_logger(), "WARNING: Not time synced with FMU");
     }
 
-    // Set the distances outside of the sensor field of view as "unknown/not used"
-    for (uint8_t i = 9; i < OBS_DISTANCE_MAX; ++i){
-      obs.distances[i] = UINT16_MAX;
 
-    }
     // In 8x8 ranging mode the FoV is 60 degrees
     obs.angle_offset = -30.0f;
     obs.increment = 8.0f;
