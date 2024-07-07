@@ -22,6 +22,9 @@ class JetsonAvoidance :  public rclcpp::Node
     // Declare parameter for i2c bus on jetson (usually 0, 1, or 7)
     this->declare_parameter("i2c_bus", 1);
     
+    // Default address is 0x52, or 82 in base 10
+    this->declare_parameter("i2c_addr", 82);
+    
     // Fill the publisher
     _obs_distance_msg = this->create_publisher<px4_msgs::msg::ObstacleDistance>("/fmu/in/obstacle_distance", 10);
 
@@ -32,6 +35,7 @@ class JetsonAvoidance :  public rclcpp::Node
     
     // Get the i2c bus
     _i2c_bus = this->get_parameter("i2c_bus").as_int();
+    _sensor_address = this->get_parameter("i2c_addr").as_int();
     // Configure the VL53L5CX
     SensorInit();
 
@@ -79,6 +83,7 @@ class JetsonAvoidance :  public rclcpp::Node
     uint8_t _init_retries{5};
     float _confidence_score{100};
     uint8_t _signal_qual[8];
+    int _sensor_address;
     int _i2c_bus{1};
 };
 
@@ -91,7 +96,7 @@ void JetsonAvoidance::SensorInit()
     switch(sensor_status) {
 
       case SensorState::Uninitialized:
-        _return_status = vl53l5cx_comms_init(&_config.platform, static_cast<char>(_i2c_bus));
+        _return_status = vl53l5cx_comms_init(&_config.platform, static_cast<char>(_i2c_bus), static_cast<uint16_t>(_sensor_address));
 
         if(_return_status != 0) {
 

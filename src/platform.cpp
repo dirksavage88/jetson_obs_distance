@@ -35,7 +35,7 @@ struct comms_struct {
 };
 #endif
 
-int32_t vl53l5cx_comms_init(VL53L5CX_Platform * p_platform, char bus)
+int32_t vl53l5cx_comms_init(VL53L5CX_Platform * p_platform, char bus, uint16_t sens_address)
 {
 
 #ifdef STMVL53L5CX_KERNEL
@@ -48,7 +48,7 @@ int32_t vl53l5cx_comms_init(VL53L5CX_Platform * p_platform, char bus)
 	char i2c_bus[10];
 	snprintf(i2c_bus, 11, "/dev/i2c-%d", bus);
 	/* Create sensor at default i2c address */
-	p_platform->address = 0x52;
+	p_platform->address = sens_address;
 	p_platform->fd = open(i2c_bus, O_RDONLY);
 	if (p_platform->fd == -1) {
 		LOG("Failed to open /dev/i2c-%d\n", bus);
