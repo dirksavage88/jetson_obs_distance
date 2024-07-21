@@ -21,7 +21,7 @@ class JetsonAvoidance :  public rclcpp::Node
     auto qos = rclcpp::QoS(rclcpp::QoSInitialization(sens_qos_profile.history, 5), sens_qos_profile);
     // Declare parameter for i2c bus on jetson (usually 0, 1, or 7)
     this->declare_parameter("i2c_bus", 1);
-    
+    this->declare_parameter("obs_index_offset", 0);
     // Fill the publisher
     _obs_distance_msg = this->create_publisher<px4_msgs::msg::ObstacleDistance>("/fmu/in/obstacle_distance", 10);
 
@@ -32,6 +32,10 @@ class JetsonAvoidance :  public rclcpp::Node
     
     // Get the i2c bus
     _i2c_bus = this->get_parameter("i2c_bus").as_int();
+    
+    // If we are running multiple sensors or a sensor not facing forward, get the obstacle distance offset
+    _obs_array_offset = this->get_parameter("obs_index_offset").as_int();
+
     // Configure the VL53L5CX
     SensorInit();
 
@@ -79,7 +83,10 @@ class JetsonAvoidance :  public rclcpp::Node
     uint8_t _init_retries{5};
     float _confidence_score{100};
     uint8_t _signal_qual[8];
+    uint8_t _array_vertical_slice{31};
+    uint8_t _zone_elements{7};
     int _i2c_bus{1};
+    int _obs_array_offset{0};
 };
 
 void JetsonAvoidance::SensorInit()
@@ -202,7 +209,7 @@ void JetsonAvoidance::DistanceReadCB() {
   vl53l5cx_check_data_ready(&_config, &_data_ready);
   
   // Set the distances outside of the sensor field of view as "unknown/not used"
-  for (uint8_t i = 8; i < _OBS_DISTANCE_MAX; ++i){
+  for (uint8_t i = _zone_elements; i < _OBS_DISTANCE_MAX; ++i){
     obs.distances[i] = _UINT16_MAX;
 
   }
@@ -211,9 +218,9 @@ void JetsonAvoidance::DistanceReadCB() {
   if(_data_ready) {
     vl53l5cx_get_ranging_data(&_config, &_results);
     // Extract the middle row since this is a 3D rangefinder, but PX4 obstacle dist array is 2D
-    for(int index = 39; index > 31; --index) {
-
-      distance_indx = 39 - index;
+    for(int index = _array_vertical_slice; index > (_array_vertical_slice - _zone_elements); --index) {
+      // Slicing the 8x8 array in half, we roughly get 28-38 as the middle two rows. Start at 28 since it is better to get a slightly downward distance than upward above the frame's horizon (pointing at infinite distance)
+      distance_indx = _array_vertical_slice - index;
 
       // Determine the signal quality first, then read the ranging result (or set to UINT16_MAX)
       _signal_qual[distance_indx] = _results.target_status[VL53L5CX_NB_TARGET_PER_ZONE*index];
@@ -265,7 +272,7 @@ void JetsonAvoidance::DistanceReadCB() {
       }
       
       // Publish the results to the array
-      obs.distances[distance_indx] = distance_val;
+      obs.distances[distance_indx + _obs_array_offset] = distance_val;
     } // End for
 
     // Check if we are subscribed to PX4 timesync
@@ -279,15 +286,15 @@ void JetsonAvoidance::DistanceReadCB() {
     }
 
 
-    // In 8x8 ranging mode the FoV is 60 degrees
-    obs.angle_offset = -30.0f;
-    obs.increment = 8.0f;
+    // In 8x8 ranging mode the FoV is ~63 degrees, each element increment is 8 deg
+    obs.angle_offset = -31.0f;
+    obs.increment = static_cast<float>(_zone_elements);
    
     // Coordinate frame is body FRD
     obs.frame = 12; // MAV_FRAME_BODY_FRD
 
     // Sensor limits in centimeters
-    obs.min_distance = 2;
+    obs.min_distance = _UINT16_MAX;
     obs.max_distance = 400;
     _obs_distance_msg->publish(obs);
 
