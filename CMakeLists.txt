@@ -14,13 +14,20 @@ find_package(px4_msgs REQUIRED)
 
 add_executable(jetson_obs_distance src/jetson_obs_distance.cpp src/platform.cpp src/vl53l5cx_api.cpp)
 
+add_executable(vl53_set_address src/vl53_set_address.cpp src/platform.cpp src/vl53l5cx_api.cpp)
 ament_target_dependencies(jetson_obs_distance rclcpp std_msgs sensor_msgs px4_msgs)
+
+ament_target_dependencies(vl53_set_address rclcpp std_msgs)
 target_include_directories(jetson_obs_distance PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_compile_features(jetson_obs_distance PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 
-install(TARGETS jetson_obs_distance
+target_include_directories(vl53_set_address PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(vl53_set_address PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+install(TARGETS jetson_obs_distance vl53_set_address
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

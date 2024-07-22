@@ -22,6 +22,10 @@ class JetsonAvoidance :  public rclcpp::Node
     // Declare parameter for i2c bus on jetson (usually 0, 1, or 7)
     this->declare_parameter("i2c_bus", 1);
     this->declare_parameter("obs_index_offset", 0);
+    
+    // Default address is 0x52, or 82 in base 10
+    this->declare_parameter("i2c_addr", 82);
+    
     // Fill the publisher
     _obs_distance_msg = this->create_publisher<px4_msgs::msg::ObstacleDistance>("/fmu/in/obstacle_distance", 10);
 
@@ -36,6 +40,7 @@ class JetsonAvoidance :  public rclcpp::Node
     // If we are running multiple sensors or a sensor not facing forward, get the obstacle distance offset
     _obs_array_offset = this->get_parameter("obs_index_offset").as_int();
 
+    _sensor_address = this->get_parameter("i2c_addr").as_int();
     // Configure the VL53L5CX
     SensorInit();
 
@@ -83,8 +88,9 @@ class JetsonAvoidance :  public rclcpp::Node
     uint8_t _init_retries{5};
     float _confidence_score{100};
     uint8_t _signal_qual[8];
-    uint8_t _array_vertical_slice{31};
-    uint8_t _zone_elements{7};
+    uint8_t _array_vertical_slice{23};
+    uint8_t _zone_elements{8};
+    int _sensor_address;
     int _i2c_bus{1};
     int _obs_array_offset{0};
 };
@@ -98,7 +104,7 @@ void JetsonAvoidance::SensorInit()
     switch(sensor_status) {
 
       case SensorState::Uninitialized:
-        _return_status = vl53l5cx_comms_init(&_config.platform, static_cast<char>(_i2c_bus));
+        _return_status = vl53l5cx_comms_init(&_config.platform, static_cast<char>(_i2c_bus), static_cast<uint16_t>(_sensor_address));
 
         if(_return_status != 0) {
 
@@ -219,46 +225,50 @@ void JetsonAvoidance::DistanceReadCB() {
     vl53l5cx_get_ranging_data(&_config, &_results);
     // Extract the middle row since this is a 3D rangefinder, but PX4 obstacle dist array is 2D
     for(int index = _array_vertical_slice; index > (_array_vertical_slice - _zone_elements); --index) {
-      // Slicing the 8x8 array in half, we roughly get 28-38 as the middle two rows. Start at 28 since it is better to get a slightly downward distance than upward above the frame's horizon (pointing at infinite distance)
+      /* Slicing the 8x8 array in half, we roughly get 23-39 as the middle two rows. 
+        Start at lower slice since it is better to get a slightly upward distance upward 
+	above the frame's horizon if we are pitched forward (and the SPAD array zones are
+       	flipped across X and Y axis, so lower SPAD slices detect objects physically higher)
+      */
       distance_indx = _array_vertical_slice - index;
 
       // Determine the signal quality first, then read the ranging result (or set to UINT16_MAX)
       _signal_qual[distance_indx] = _results.target_status[VL53L5CX_NB_TARGET_PER_ZONE*index];
     
       switch(_signal_qual[distance_indx]) {
-        // Range valid
+        // Range valid. Only fuse measurements with this signal qual
 	case 5:
 	    _confidence_score = 100;
            RCLCPP_INFO(this->get_logger(), "Target detected");
            distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	    break;
 
-	// No targets detected, range valid
+	// No targets detected+range valid. 
+	// Ignore since without targets detected,the sensor will latch stale targets
 	case 255:
-	    _confidence_score = 75;
- 	    distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+	    _confidence_score = 70;
+            distance_val = _UINT16_MAX;
 	    break;
 	
-	// No previous target detected, range valid
+	// No previous target detected+range valid
 	case 10:
-	    _confidence_score = 100;
-            distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+	    _confidence_score = 60;
+            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
+	    distance_val = _UINT16_MAX;
 	    break;
 	// Wrap around not performed (first range)
-	case 6:
-	   _confidence_score = 50;
-           RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
-           distance_val = _UINT16_MAX;
-   	   //distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
-	   break;
-	// Range valid with large pulse
 	case 9:
 	   _confidence_score = 50;
            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
-           //distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
            distance_val = _UINT16_MAX;
 	   break;
-	// Range quality poor
+	// Range valid with large pulse
+	case 6:
+	   _confidence_score = 30;
+           RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
+           distance_val = _UINT16_MAX;
+	   break;
+	// Range quality invalid
 	default:
 	   _confidence_score = 0;
            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality invalid: %hhu", _signal_qual[distance_indx]);
@@ -272,7 +282,8 @@ void JetsonAvoidance::DistanceReadCB() {
       }
       
       // Publish the results to the array
-      obs.distances[distance_indx + _obs_array_offset] = distance_val;
+      obs.distances[distance_indx] = distance_val;
+
     } // End for
 
     // Check if we are subscribed to PX4 timesync
@@ -286,9 +297,9 @@ void JetsonAvoidance::DistanceReadCB() {
     }
 
 
-    // In 8x8 ranging mode the FoV is ~63 degrees, each element increment is 8 deg
-    obs.angle_offset = -31.0f;
-    obs.increment = static_cast<float>(_zone_elements);
+    // In 8x8 ranging mode the FoV is ~63 degrees, each of the 8 elements increment is 10 deg to divide by 360 evenly
+    obs.angle_offset = -40.0f;
+    obs.increment = 10;
    
     // Coordinate frame is body FRD
     obs.frame = 12; // MAV_FRAME_BODY_FRD
