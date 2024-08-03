@@ -157,8 +157,11 @@ void JetsonAvoidance::SensorInit()
       
       // Set the sensor resolution (8x8)
       case SensorState::SetRes:
-	_return_status |= vl53l5cx_set_integration_time_ms(&_config, 60);
-        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 15);
+	// Set the ranging mode to continuous (VCSEL always on)
+	_return_status |= vl53l5cx_set_ranging_mode(&_config, VL53L5CX_RANGING_MODE_CONTINUOUS);
+	// Integration ignored if in continuous
+	//_return_status |= vl53l5cx_set_integration_time_ms(&_config, 60);
+        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 5);
         if(_return_status != 0) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX frequency not set");
 	        // Exit and retry
