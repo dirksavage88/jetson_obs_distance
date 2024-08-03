@@ -157,7 +157,8 @@ void JetsonAvoidance::SensorInit()
       
       // Set the sensor resolution (8x8)
       case SensorState::SetRes:
-        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 30);
+	_return_status |= vl53l5cx_set_integration_time_ms(&_config, 60);
+        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 15);
         if(_return_status != 0) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX frequency not set");
 	        // Exit and retry
@@ -238,35 +239,39 @@ void JetsonAvoidance::DistanceReadCB() {
       switch(_signal_qual[distance_indx]) {
         // Range valid. Only fuse measurements with this signal qual
 	case 5:
-	    _confidence_score = 100;
+	   _confidence_score = 100;
            RCLCPP_INFO(this->get_logger(), "Target detected");
            distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
-	    break;
-
-	// No targets detected+range valid. 
-	// Ignore since without targets detected,the sensor will latch stale targets
-	case 255:
-	    _confidence_score = 70;
-            distance_val = _UINT16_MAX;
-	    break;
+	   break;
+          
+	case 6:
+	   _confidence_score = 50;
+           RCLCPP_INFO(this->get_logger(), "Wrap around not performed");
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+	   break;
+	case 9:
+	   _confidence_score = 50;
+           RCLCPP_INFO(this->get_logger(), "Range valid with large pulse");
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+	   break;
 	
 	// No previous target detected+range valid
 	case 10:
-	    _confidence_score = 60;
-            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
-	    distance_val = _UINT16_MAX;
-	    break;
-	// Wrap around not performed (first range)
-	case 9:
-	   _confidence_score = 50;
-           RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
-           distance_val = _UINT16_MAX;
+	   _confidence_score = 0;
+           RCLCPP_WARN(this->get_logger(), "Range valid, no target detected previously");
+	   distance_val = _UINT16_MAX;
 	   break;
-	// Range valid with large pulse
-	case 6:
-	   _confidence_score = 30;
-           RCLCPP_WARN(this->get_logger(), "WARNING: Range quality poor");
-           distance_val = _UINT16_MAX;
+
+	case 12:
+	   _confidence_score = 50;
+           RCLCPP_INFO(this->get_logger(), "Target blurred");
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+	   break;
+	case 255:
+	   _confidence_score = 0;
+           RCLCPP_WARN(this->get_logger(), "No target detected");
+           //distance_val = _UINT16_MAX;
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	   break;
 	// Range quality invalid
 	default:
@@ -283,7 +288,7 @@ void JetsonAvoidance::DistanceReadCB() {
       
       // Publish the results to the array
       obs.distances[distance_indx] = distance_val;
-
+      //RCLCPP_INFO(this->get_logger(), "Range: %hu", distance_val);
     } // End for
 
     // Check if we are subscribed to PX4 timesync
