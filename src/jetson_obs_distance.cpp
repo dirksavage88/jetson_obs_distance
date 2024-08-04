@@ -240,8 +240,20 @@ void JetsonAvoidance::DistanceReadCB() {
       _signal_qual[distance_indx] = _results.target_status[VL53L5CX_NB_TARGET_PER_ZONE*index];
     
       switch(_signal_qual[distance_indx]) {
-        // Range valid. Only fuse measurements with this signal qual
-	case 5:
+
+	case 0:
+	   _confidence_score = 25;
+           RCLCPP_WARN(this->get_logger(), "Ranging not updated");
+           distance_val = _UINT16_MAX;
+	   break;
+       case 4:
+	   _confidence_score = 25;
+           RCLCPP_INFO(this->get_logger(), "Target consistency failed");
+           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+	   break;
+      
+        // Range valid. 
+        case 5:
 	   _confidence_score = 100;
            RCLCPP_INFO(this->get_logger(), "Target detected");
            distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
@@ -261,8 +273,8 @@ void JetsonAvoidance::DistanceReadCB() {
 	// No previous target detected+range valid
 	case 10:
 	   _confidence_score = 0;
-           RCLCPP_WARN(this->get_logger(), "Range valid, no target detected previously");
-	   distance_val = _UINT16_MAX;
+           RCLCPP_INFO(this->get_logger(), "Range valid, no target detected previously");
+	   distance_val = distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1);
 	   break;
 
 	case 12:
@@ -270,11 +282,11 @@ void JetsonAvoidance::DistanceReadCB() {
            RCLCPP_INFO(this->get_logger(), "Target blurred");
            distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	   break;
+	// Ignore since if the target is removed from fov, the buffer will not be zeroed out = stale data
 	case 255:
 	   _confidence_score = 0;
            RCLCPP_WARN(this->get_logger(), "No target detected");
-           //distance_val = _UINT16_MAX;
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+           distance_val = _UINT16_MAX;
 	   break;
 	// Range quality invalid
 	default:
