@@ -71,7 +71,7 @@ class JetsonAvoidance :  public rclcpp::Node
     uint8_t _init_retries{5};
     float _confidence_score{100};
     uint8_t _signal_qual[8];
-    uint8_t _array_vertical_slice{23};
+    uint8_t _array_vertical_slice{31};
     uint8_t _zone_elements{8};
     int _sensor_address;
     int _i2c_bus{1};
@@ -143,7 +143,9 @@ void JetsonAvoidance::SensorInit()
 	// Set the ranging mode to continuous (VCSEL always on)
 	_return_status |= vl53l5cx_set_ranging_mode(&_config, VL53L5CX_RANGING_MODE_CONTINUOUS);
 	// Integration ignored if in continuous
-        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 5);
+        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 2);
+        // Sharpener to delineate targets
+	_return_status |= vl53l5cx_set_sharpener_percent(&_config, 2);
         if(_return_status != 0) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX frequency not set");
 	        // Exit and retry
