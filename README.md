@@ -22,3 +22,5 @@ I2C bus index depends on the Jetson i2c port (and the jetson board used). Usuall
 
 ## Testing
 Built and tested on ROS 2 Foxy. Built package in ROS 2 humble without issues but not tested.
+
+**Note that these sensors are for indoor use only! Outdoors the ambient light can be too strong for the VL53L5CX sensor.**
