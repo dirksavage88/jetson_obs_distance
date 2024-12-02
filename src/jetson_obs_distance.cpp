@@ -252,7 +252,7 @@ void JetsonAvoidance::DistanceReadCB() {
 	case 10:
 	   _confidence_score = 0;
            RCLCPP_INFO(this->get_logger(), "Range valid, no target detected previously");
-	   distance_val = distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1);
+	   distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1);
 	   break;
 
 	case 12:
@@ -280,7 +280,7 @@ void JetsonAvoidance::DistanceReadCB() {
       }
       
       // Publish the results to the array
-      obs.distances[distance_indx] = distance_val;
+      obs.distances[distance_indx + _obs_array_offset] = distance_val;
       //RCLCPP_INFO(this->get_logger(), "Range: %hu", distance_val);
     } // End for
 

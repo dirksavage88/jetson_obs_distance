@@ -19,13 +19,14 @@ class Vl53l5cxAddress: public rclcpp::Node {
    
     this->declare_parameter("num_sensors", 1);
     this->declare_parameter("starting_gpio", 12);
-
+    this->declare_parameter("i2c_address", 0x2a);
     this->declare_parameter("i2c_bus", 1); 
     _num_sensors = this->get_parameter("num_sensors").as_int();
     _i2c_bus = this->get_parameter("i2c_bus").as_int();
     // We start at a gpio number and iterate until num_sensors 
     // E.g. gpio 12 -> sensor 0, gpio++ for each sensor iterated
     _gpio_index = this->get_parameter("starting_gpio").as_int();
+    _i2c_address = this->get_parameter("i2c_address").as_int();
     SetAddress(static_cast<char>(_i2c_bus));
   }
 	
@@ -39,26 +40,47 @@ class Vl53l5cxAddress: public rclcpp::Node {
     int SetAddress(char bus);
     int _gpio_index{0};
     int _gpio_max{0};
-    void Vl53l5cxReset(int gpio, bool reset);
+    int _i2c_address{0};
+    void Vl53l5cxReset(int* p_fd, int gpio, bool reset);
+    void Vl53l5cxPullup(int* p_fd, int gpio);
 };
 
 
 int Vl53l5cxAddress::SetAddress(char bus) {
 	
-	
 	_gpio_max = _num_sensors + _gpio_index;
 	int selected_gpio = 0;
+	int fd;
+	for (int export_gpio = _gpio_index; export_gpio < _gpio_max; ++export_gpio) {
+	
+		std::string s_gpio = std::to_string(export_gpio);
+		// Export the gpio
+		fd = open("/sys/class/gpio/export", O_WRONLY);
+		if (fd == -1) {
+			perror("Error opening sys class");
+			exit(1);
+		}
+	
+		if(write(fd, s_gpio.c_str(), s_gpio.size()) < 0) {
+
+			perror("Error exporting gpio to sys class");
+			exit(1);
+		}
+		close(fd);
+	
+	}
+
 	for(int i = 0; i < _num_sensors; i++){
                 //we want to set 12, so 13, 14, 15 pulled low
                 selected_gpio = i + _gpio_index;
 
 		for (int gpio_num = _gpio_index; gpio_num < _gpio_max; ++gpio_num) {
 			if(gpio_num == selected_gpio) {
-				Vl53l5cxReset(gpio_num, false);
+				Vl53l5cxReset(&fd, gpio_num, false);
 			}
 
 			else {
-				Vl53l5cxReset(gpio_num, true);
+				Vl53l5cxReset(&fd, gpio_num, true);
 			}
 		}		
 		if(vl53l5cx_comms_init(&Sensor[i].platform, bus, DEFAULT_ADDRESS)){
@@ -72,68 +94,75 @@ int Vl53l5cxAddress::SetAddress(char bus) {
 			exit(-1);
 		}
 		// What is this used for?
-		Sensor[i].platform.address= new_address;
+		Sensor[i].platform.address= new_address<<1;
 		vl53l5cx_comms_close(&Sensor[i].platform);
 	}
 
 	// All i2c addresses configured; pull all sensor resets up
 	
 	for (int sensor = _gpio_index; sensor < _gpio_max; ++sensor) {
-		Vl53l5cxReset(sensor, false);
+		Vl53l5cxPullup(&fd, sensor);
 	}		
 
 	return 1;
 }
+void Vl53l5cxAddress::Vl53l5cxPullup(int* p_fd, int gpio_index) {
 
-void Vl53l5cxAddress::Vl53l5cxReset(int gpio_index, bool reset) {
+	char value_path[30];
+
+	// Pull pin high/low
+	snprintf(value_path, sizeof(value_path), "/sys/class/gpio/gpio%d/value", gpio_index);
+	*p_fd = open(value_path, O_WRONLY);
+
+	if (*p_fd == -1) {
+	
+		perror("Error opening gpio value");
+		exit(1);
+	}
+	
+	if(write(*p_fd, "1", 1) != 1) {
+
+		perror("Error writing to sys class");
+		exit(1);
+	}
+	close(*p_fd);
+}
+void Vl53l5cxAddress::Vl53l5cxReset(int* p_fd, int gpio_index, bool reset) {
 	char direction_path[35];
 	char value_path[30];
 	std::string s_gpio = std::to_string(gpio_index);
 	
-	// Export the gpio
-	int fd = open("/sys/class/gpio/export", O_WRONLY);
-	if (fd == -1) {
-		perror("Error opening sys class");
-		exit(1);
-	}
-	
-	if(write(fd, s_gpio.c_str(), s_gpio.size()) < 0) {
-
-		perror("Error exporting gpio to sys class");
-		exit(1);
-	}
-	close(fd);
 
 	// Set the gpio direction out
 	snprintf(direction_path, sizeof(direction_path), "/sys/class/gpio/gpio%d/direction", gpio_index);
-	fd = open(direction_path, O_WRONLY);
+	*p_fd = open(direction_path, O_WRONLY);
 
-	if (fd == -1) {
+	if (*p_fd == -1) {
 	
 		perror("Error opening gpio direction");
 		exit(1);
 	}
 
-	if(write(fd, "out", 3) != 3) {
+	if(write(*p_fd, "out", 3) != 3) {
 	
 		perror("Error setting gpio direction");
 		exit(1);
 	
 	}
-	close(fd);
+	close(*p_fd);
 
 	// Pull pin high/low
 	snprintf(value_path, sizeof(value_path), "/sys/class/gpio/gpio%d/value", gpio_index);
-	fd = open(value_path, O_WRONLY);
+	*p_fd = open(value_path, O_WRONLY);
 
-	if (fd == -1) {
+	if (*p_fd == -1) {
 	
 		perror("Error opening gpio value");
 		exit(1);
 	}
 	if(reset) {
 	
-		if(write(fd, "0", 1) != 1) {
+		if(write(*p_fd, "0", 1) != 1) {
 
 			perror("Error writing to sys class");
 			exit(1);
@@ -142,13 +171,13 @@ void Vl53l5cxAddress::Vl53l5cxReset(int gpio_index, bool reset) {
 	}
 	else {
 	
-		if(write(fd, "1", 1) != 1) {
+		if(write(*p_fd, "1", 1) != 1) {
 
 			perror("Error writing to sys class");
 			exit(1);
 		}
 	}
-	close(fd);
+	close(*p_fd);
 }
 
 

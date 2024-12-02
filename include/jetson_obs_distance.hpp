@@ -12,7 +12,6 @@ enum class SensorState {
   SetRes,
   SetFreq,
   RangingActive,
-  DataReady,
   Failure,
   InitComplete
 
