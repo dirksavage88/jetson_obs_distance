@@ -41,7 +41,7 @@ class JetsonAvoidance :  public rclcpp::Node
     // only create wall timer if sensor init was successful
      if(_return_status == 0) {
      
-    	_timer = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&JetsonAvoidance::DistanceReadCB, this));
+    	_timer = this->create_wall_timer(std::chrono::milliseconds(25), std::bind(&JetsonAvoidance::DistanceReadCB, this));
      }
 
   }
@@ -63,6 +63,7 @@ class JetsonAvoidance :  public rclcpp::Node
     // Constants
     const uint16_t _UINT16_MAX{65535};
     const uint8_t _OBS_DISTANCE_MAX{72};
+    const uint16_t _OUT_OF_RANGE{401};
     
     // Member variables
     uint8_t _return_status{0};
@@ -143,7 +144,7 @@ void JetsonAvoidance::SensorInit()
 	// Set the ranging mode to continuous (VCSEL always on)
 	_return_status |= vl53l5cx_set_ranging_mode(&_config, VL53L5CX_RANGING_MODE_CONTINUOUS);
 	// Integration ignored if in continuous
-        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 2);
+        _return_status |= vl53l5cx_set_ranging_frequency_hz(&_config, 5);
         // Sharpener to delineate targets
 	_return_status |= vl53l5cx_set_sharpener_percent(&_config, 2);
         if(_return_status != 0) {
@@ -197,7 +198,7 @@ void JetsonAvoidance::DistanceReadCB() {
   vl53l5cx_check_data_ready(&_config, &_data_ready);
   
   // Set the distances outside of the sensor field of view as "unknown/not used"
-  for (uint8_t i = _zone_elements; i < _OBS_DISTANCE_MAX; ++i){
+  for (uint8_t i = 0; i < _OBS_DISTANCE_MAX; ++i){
     obs.distances[i] = _UINT16_MAX;
 
   }
@@ -222,63 +223,59 @@ void JetsonAvoidance::DistanceReadCB() {
 	case 0:
 	   _confidence_score = 25;
            RCLCPP_WARN(this->get_logger(), "Ranging not updated");
-           distance_val = _UINT16_MAX;
 	   break;
        case 4:
-	   _confidence_score = 25;
+	   _confidence_score = 50;
            RCLCPP_INFO(this->get_logger(), "Target consistency failed");
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	   break;
       
         // Range valid. 
         case 5:
 	   _confidence_score = 100;
            RCLCPP_INFO(this->get_logger(), "Target detected");
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	   break;
           
 	case 6:
 	   _confidence_score = 50;
            RCLCPP_INFO(this->get_logger(), "Wrap around not performed");
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	   break;
+
 	case 9:
 	   _confidence_score = 50;
            RCLCPP_INFO(this->get_logger(), "Range valid with large pulse");
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	   break;
 	
 	// No previous target detected+range valid
 	case 10:
-	   _confidence_score = 0;
+	   _confidence_score = 50;
            RCLCPP_INFO(this->get_logger(), "Range valid, no target detected previously");
-	   distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1);
 	   break;
 
 	case 12:
 	   _confidence_score = 50;
            RCLCPP_INFO(this->get_logger(), "Target blurred");
-           distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
 	   break;
 	// Ignore since if the target is removed from fov, the buffer will not be zeroed out = stale data
 	case 255:
-	   _confidence_score = 0;
+	   _confidence_score = 25;
            RCLCPP_WARN(this->get_logger(), "No target detected");
-           distance_val = _UINT16_MAX;
 	   break;
+
 	// Range quality invalid
 	default:
 	   _confidence_score = 0;
            RCLCPP_WARN(this->get_logger(), "WARNING: Range quality invalid: %hhu", _signal_qual[distance_indx]);
-           distance_val = _UINT16_MAX;
 	   break;
+
       } // End switch
 
-      // Invalidate (set to unknown) if distance value returns 0 m range
-      if (distance_val == 0) {
-      	distance_val = _UINT16_MAX;
+      // Set to out of range if distance value returns invaild or inconsistent range
+      if (_confidence_score < 50) {
+      	distance_val = _OUT_OF_RANGE;
       }
-      
+      else {
+      	distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
+      }
       // Publish the results to the array
       obs.distances[distance_indx + _obs_array_offset] = distance_val;
       //RCLCPP_INFO(this->get_logger(), "Range: %hu", distance_val);
@@ -286,9 +283,9 @@ void JetsonAvoidance::DistanceReadCB() {
 
     	obs.timestamp = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()).time_since_epoch().count();
   
-    // In 8x8 ranging mode the FoV is ~63 degrees, each of the 8 elements increment is 10 deg to divide by 360 evenly
-    obs.angle_offset = -40.0f;
-    obs.increment = 10;
+    // In 8x8 ranging mode the FoV is ~43 degrees, each of the 8 elements increment is 5 deg to divide by 360 evenly
+    obs.angle_offset = -20.0f;
+    obs.increment = 5;
    
     // Coordinate frame is body FRD
     obs.frame = 12; // MAV_FRAME_BODY_FRD
