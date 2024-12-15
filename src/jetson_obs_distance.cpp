@@ -6,8 +6,8 @@
 #include "vl53l5cx_api.hpp"
 #include "jetson_obs_distance.hpp"
 #include <rclcpp/rclcpp.hpp>
-#include <px4_msgs/msg/distance_sensor.hpp>
-#include <px4_msgs/msg/obstacle_distance.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
+// #include <px4_msgs/msg/obstacle_distance.hpp>
 
 class JetsonAvoidance :  public rclcpp::Node 
 {
@@ -25,15 +25,35 @@ class JetsonAvoidance :  public rclcpp::Node
     // Default address is 0x52, or 82 in base 10
     this->declare_parameter("i2c_addr", 82);
     
-    // Fill the publisher
-    _obs_distance_msg = this->create_publisher<px4_msgs::msg::ObstacleDistance>("/fmu/in/obstacle_distance", 10);
+
 
     // Get the i2c bus
     _i2c_bus = this->get_parameter("i2c_bus").as_int();
     
     // If we are running multiple sensors or a sensor not facing forward, get the obstacle distance offset
+    
     _obs_array_offset = this->get_parameter("obs_index_offset").as_int();
+    
+    std::string topic_name;
+    
+    // Fill the publisher
+   if(_obs_array_offset == 0) {
+    topic_name = "/front/obstacle_distance";
 
+   }
+   else if(_obs_array_offset == 18) {
+    topic_name = "/right/obstacle_distance";
+
+   }
+   else if(_obs_array_offset == 36) {
+    topic_name = "/rear/obstacle_distance";
+   }
+   else {
+
+    topic_name = "/left/obstacle_distance";
+   }
+    _obs_distance_msg = this->create_publisher<sensor_msgs::msg::LaserScan>(topic_name, 10);
+    
     _sensor_address = this->get_parameter("i2c_addr").as_int();
     // Configure the VL53L5CX
     SensorInit();
@@ -52,7 +72,7 @@ class JetsonAvoidance :  public rclcpp::Node
     void DistanceReadCB(void);
     
     // Create publisher
-    rclcpp::Publisher<px4_msgs::msg::ObstacleDistance>::SharedPtr _obs_distance_msg;
+    rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr _obs_distance_msg;
     
     // VL53L5CX configuration & results struct
     VL53L5CX_Configuration _config;
@@ -61,7 +81,7 @@ class JetsonAvoidance :  public rclcpp::Node
     rclcpp::TimerBase::SharedPtr _timer;
     
     // Constants
-    const uint16_t _UINT16_MAX{65535};
+    // const uint16_t _UINT16_MAX{65535};
     const uint8_t _OBS_DISTANCE_MAX{72};
     const uint16_t _OUT_OF_RANGE{401};
     
@@ -193,13 +213,16 @@ void JetsonAvoidance::SensorInit()
 void JetsonAvoidance::DistanceReadCB() {
   uint16_t distance_val;
   uint8_t distance_indx = 0;
-  px4_msgs::msg::ObstacleDistance obs;
+  sensor_msgs::msg::LaserScan obs;
+  // px4_msgs::msg::ObstacleDistance obs;
+  // Convert distance cm to meters
+  const float cm_to_m = 0.01;
 
   vl53l5cx_check_data_ready(&_config, &_data_ready);
   
   // Set the distances outside of the sensor field of view as "unknown/not used"
-  for (uint8_t i = 0; i < _OBS_DISTANCE_MAX; ++i){
-    obs.distances[i] = _UINT16_MAX;
+  for (uint8_t i = _obs_array_offset; i < _obs_array_offset + 7; ++i){
+    obs.ranges[i] = cm_to_m * static_cast<float>(_OUT_OF_RANGE);
 
   }
   // Collect ranging results array from the VL53L5CX
@@ -277,22 +300,24 @@ void JetsonAvoidance::DistanceReadCB() {
       	distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
       }
       // Publish the results to the array
-      obs.distances[distance_indx + _obs_array_offset] = distance_val;
+      obs.ranges[distance_indx + _obs_array_offset] = static_cast<float>(distance_val) * cm_to_m;
       //RCLCPP_INFO(this->get_logger(), "Range: %hu", distance_val);
     } // End for
 
-    	obs.timestamp = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()).time_since_epoch().count();
+    	//obs.timestamp = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()).time_since_epoch().count();
   
     // In 8x8 ranging mode the FoV is ~43 degrees, each of the 8 elements increment is 5 deg to divide by 360 evenly
-    obs.angle_offset = -20.0f;
-    obs.increment = 5;
+    obs.angle_min = -0.35; //-20.0 degrees
+    obs.angle_increment = 0.087; // 5 degrees
    
     // Coordinate frame is body FRD
-    obs.frame = 12; // MAV_FRAME_BODY_FRD
+    // MAV_FRAME_BODY_FRD
+    // obs.frame = 12; 
+
 
     // Sensor limits in centimeters
-    obs.min_distance = 5;
-    obs.max_distance = 400;
+    obs.range_min = 0.05;
+    obs.range_max = 4.0;
     _obs_distance_msg->publish(obs);
 
 
