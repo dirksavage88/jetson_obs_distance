@@ -7,7 +7,6 @@
 #include "jetson_obs_distance.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
-// #include <px4_msgs/msg/obstacle_distance.hpp>
 
 class JetsonAvoidance :  public rclcpp::Node 
 {
@@ -31,7 +30,6 @@ class JetsonAvoidance :  public rclcpp::Node
     _i2c_bus = this->get_parameter("i2c_bus").as_int();
     
     // If we are running multiple sensors or a sensor not facing forward, get the obstacle distance offset
-    
     _obs_array_offset = this->get_parameter("obs_index_offset").as_int();
     
     std::string topic_name;
@@ -81,8 +79,6 @@ class JetsonAvoidance :  public rclcpp::Node
     rclcpp::TimerBase::SharedPtr _timer;
     
     // Constants
-    // const uint16_t _UINT16_MAX{65535};
-    const uint8_t _OBS_DISTANCE_MAX{72};
     const uint16_t _OUT_OF_RANGE{401};
     
     // Member variables
@@ -113,21 +109,21 @@ void JetsonAvoidance::SensorInit()
         if(_return_status != 0) {
 
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device not connected");
-	        _return_status = 1;
-	        // Exit and retry
+	  _return_status = 1;
+	  // Exit and retry
           sensor_status = SensorState::Failure;
-	        break;
-	      }
+	  break;
+	}
 
-	      sensor_status = SensorState::CommsInit;
-	      break;
+	sensor_status = SensorState::CommsInit;
+	break;
 
       case SensorState::CommsInit:
         _return_status = vl53l5cx_is_alive(&_config, &_is_active);
         
         if(!_is_active || (_return_status != 0)) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device not responding");
-	        // Exit and retry
+	  // Exit and retry
           sensor_status = SensorState::Failure;
           break;
         }
@@ -138,22 +134,22 @@ void JetsonAvoidance::SensorInit()
       case SensorState::CheckAlive:
         _return_status |= vl53l5cx_init(&_config);
 	      
-	      if(_return_status != 0){
+	if(_return_status != 0){
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX device init failed");
-	        // Exit and retry
+	  // Exit and retry
           sensor_status = SensorState::Failure;
           break;
-	      }
+	}
 
-	      sensor_status = SensorState::Init;
-	      break;
+	sensor_status = SensorState::Init;
+	break;
 
       case SensorState::Init:
         _return_status |= vl53l5cx_set_resolution(&_config, VL53L5CX_RESOLUTION_8X8);
 
         if(_return_status != 0) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX resolution not set");
-	        // Exit and retry
+	  // Exit and retry
           sensor_status = SensorState::Failure;
         }
         sensor_status = SensorState::SetRes;
@@ -169,7 +165,7 @@ void JetsonAvoidance::SensorInit()
 	_return_status |= vl53l5cx_set_sharpener_percent(&_config, 2);
         if(_return_status != 0) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX frequency not set");
-	        // Exit and retry
+	  // Exit and retry
           sensor_status = SensorState::Failure;
           break;
         }
@@ -181,7 +177,7 @@ void JetsonAvoidance::SensorInit()
         _return_status |= vl53l5cx_start_ranging(&_config);
         if(_return_status != 0) {
           RCLCPP_ERROR(this->get_logger(), "ERROR: VL53L5CX ranging failed");
-	        // Exit and retry
+	  // Exit and retry
           sensor_status = SensorState::Failure;
           break;
         }
@@ -195,14 +191,14 @@ void JetsonAvoidance::SensorInit()
           break;
 
       case SensorState::Failure:
-	      --_init_retries; 
-	      if(_init_retries == 0) {
+        --_init_retries; 
+	if(_init_retries == 0) {
           // Exit the main init loop
           return;
-	      }
-	      // Retry from the uninit state
-	      sensor_status = SensorState::Uninitialized;
-	      break;
+	}
+	// Retry from the uninit state
+	sensor_status = SensorState::Uninitialized;
+	break;
 
     }// End switch
 
@@ -218,13 +214,26 @@ void JetsonAvoidance::DistanceReadCB() {
   // Convert distance cm to meters
   const float cm_to_m = 0.01;
 
+  // In 8x8 ranging mode the FoV is ~43 degrees, each of the 8 elements increment is 5 deg to divide by 360 evenly
+  obs.angle_min = -0.35; //-20.0 degrees
+  obs.angle_increment = 0.087; // 5 degrees
+  obs.angle_max = obs.angle_min + 0.087;
+
+  obs.scan_time = 0.5;
+  obs.time_increment = 0.0;
+
+  // Sensor limits in meters
+  obs.range_min = 0.05;
+  obs.range_max = 4.0;
   vl53l5cx_check_data_ready(&_config, &_data_ready);
   
+  obs.ranges.resize(8);
+  obs.intensities.resize(8);
   // Set the distances outside of the sensor field of view as "unknown/not used"
-  for (uint8_t i = _obs_array_offset; i < _obs_array_offset + 7; ++i){
+  /*for (uint8_t i = _obs_array_offset; i < _obs_array_offset + 17; ++i){
     obs.ranges[i] = cm_to_m * static_cast<float>(_OUT_OF_RANGE);
 
-  }
+  }*/
   // Collect ranging results array from the VL53L5CX
 
   if(_data_ready) {
@@ -299,25 +308,15 @@ void JetsonAvoidance::DistanceReadCB() {
       else {
       	distance_val = round(_results.distance_mm[VL53L5CX_NB_TARGET_PER_ZONE*index] * 0.1); 
       }
-      // Publish the results to the array
+   
+      // Place the results in the array
       obs.ranges[distance_indx + _obs_array_offset] = static_cast<float>(distance_val) * cm_to_m;
-      //RCLCPP_INFO(this->get_logger(), "Range: %hu", distance_val);
+    
     } // End for
 
-    	//obs.timestamp = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()).time_since_epoch().count();
-  
-    // In 8x8 ranging mode the FoV is ~43 degrees, each of the 8 elements increment is 5 deg to divide by 360 evenly
-    obs.angle_min = -0.35; //-20.0 degrees
-    obs.angle_increment = 0.087; // 5 degrees
-   
-    // Coordinate frame is body FRD
-    // MAV_FRAME_BODY_FRD
-    // obs.frame = 12; 
+    obs.header.stamp = this->get_clock()->now(); 
+    obs.header.frame_id = "laser_frame"; 
 
-
-    // Sensor limits in centimeters
-    obs.range_min = 0.05;
-    obs.range_max = 4.0;
     _obs_distance_msg->publish(obs);
 
 
