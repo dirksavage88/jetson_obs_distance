@@ -14,9 +14,6 @@ class JetsonAvoidance :  public rclcpp::Node
   public:
   explicit JetsonAvoidance() : Node("jetson_obs_distance")
   {
-    rmw_qos_profile_t sens_qos_profile = rmw_qos_profile_sensor_data;
-
-    auto qos = rclcpp::QoS(rclcpp::QoSInitialization(sens_qos_profile.history, 5), sens_qos_profile);
     // Declare parameter for i2c bus on jetson (usually 0, 1, or 7)
     this->declare_parameter("i2c_bus", 1);
     this->declare_parameter("obs_index_offset", 0);
