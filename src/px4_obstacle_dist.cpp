@@ -11,9 +11,9 @@ class PX4ObstacleDist: public rclcpp::Node {
   explicit PX4ObstacleDist () : Node("px4_obs_distance"){
 
     // PX4 topics should be qos profile sensor data
-    rmw_qos_profile_t sens_qos_profile = rmw_qos_profile_sensor_data;
-
-    auto qos = rclcpp::QoS(rclcpp::QoSInitialization(sens_qos_profile.history, 5), sens_qos_profile); 
+    //rmw_qos_profile_t sens_qos_profile = rmw_qos_profile_sensor_data;
+    auto qos = rclcpp::QoS(rclcpp::SystemDefaultsQoS());
+    //auto qos = rclcpp::QoS(rclcpp::QoSInitialization(sens_qos_profile.history, 5), sens_qos_profile); 
     
     // Publishers
     _px4_distance_pub = this->create_publisher<px4_msgs::msg::ObstacleDistance>("/fmu/in/obstacle_distance", 10);
@@ -24,8 +24,8 @@ class PX4ObstacleDist: public rclcpp::Node {
     _rear_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/rear/obstacle_distance", qos, std::bind(&PX4ObstacleDist::RearDistanceCB, this, _1));
     _left_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/left/obstacle_distance", qos, std::bind(&PX4ObstacleDist::LeftDistanceCB, this, _1));
     timer_cb_group_ = nullptr;
-    // Publish to the px4 obstacle map only at 2hz, since sensor data is 5hz
-    auto timer_ptr_ = this->create_wall_timer(std::chrono::milliseconds(500), std::bind(&PX4ObstacleDist::SendDistance, this));
+    // Publish to the px4 obstacle map only at ~3hz, since sensor data is 5hz
+    timer_ptr_ = this->create_wall_timer(std::chrono::milliseconds(300), std::bind(&PX4ObstacleDist::SendDistance, this));
   }
 
   private:
@@ -36,6 +36,7 @@ class PX4ObstacleDist: public rclcpp::Node {
     
     rclcpp::Publisher<px4_msgs::msg::ObstacleDistance>::SharedPtr _px4_distance_pub;
     rclcpp::CallbackGroup::SharedPtr timer_cb_group_;
+    rclcpp::TimerBase::SharedPtr timer_ptr_;
     const uint8_t _OBS_DISTANCE_MAX{72};
     const uint16_t _OUT_OF_RANGE{401};
     const uint8_t _ZONES{8};
@@ -65,24 +66,24 @@ void PX4ObstacleDist::SendDistance() {
     // _front_map[i] = _M_TO_CM * _msg.ranges[i];
     if(i < 8) {
 
-      ob_distance.distances[i] = _M_TO_CM * _front_map[i];
+      ob_distance.distances[i] = _front_map[i];
     }
 
     else if(i > 17 && i < 26) {
 
-      ob_distance.distances[i] = _M_TO_CM * _right_map[i - 18];
+      ob_distance.distances[i] = _right_map[i - 18];
 
     }
 
     else if (i > 35 && i < 44) {
 
-      ob_distance.distances[i] = _M_TO_CM * _rear_map[i - 36];
+      ob_distance.distances[i] = _rear_map[i - 36];
 
     }
 
     else if (i > 53 && i < 62) {
 
-      ob_distance.distances[i] = _M_TO_CM * _left_map[i - 54];
+      ob_distance.distances[i] = _left_map[i - 54];
 
     }
     else {
@@ -96,7 +97,6 @@ void PX4ObstacleDist::SendDistance() {
 
 }
 void PX4ObstacleDist::FrontDistanceCB(const sensor_msgs::msg::LaserScan::SharedPtr _msg) {
-
   // Put laserscan data into local array
   for (uint8_t i = 0; i < _ZONES; ++i) {
     _front_map[i] = _M_TO_CM * _msg->ranges[i];
