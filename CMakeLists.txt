@@ -27,7 +27,7 @@ target_include_directories(vl53_set_address PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_compile_features(vl53_set_address PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
-install(TARGETS jetson_obs_distance vl53_set_address
+install(TARGETS jetson_obs_distance vl53_set_address px4_obs_distance
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

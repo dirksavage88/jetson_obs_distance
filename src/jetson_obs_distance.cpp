@@ -34,18 +34,19 @@ class JetsonAvoidance :  public rclcpp::Node
     // Fill the publisher
    if(_obs_array_offset == 0) {
     topic_name = "/front/obstacle_distance";
-
+    _frame_id = "laser_frame_front";
    }
    else if(_obs_array_offset == 18) {
     topic_name = "/right/obstacle_distance";
-
+    _frame_id = "laser_frame_right";
    }
    else if(_obs_array_offset == 36) {
     topic_name = "/rear/obstacle_distance";
+    _frame_id = "laser_frame_rear";
    }
    else {
-
     topic_name = "/left/obstacle_distance";
+    _frame_id = "laser_frame_left";
    }
     _obs_distance_msg = this->create_publisher<sensor_msgs::msg::LaserScan>(topic_name, 10);
     
@@ -90,6 +91,7 @@ class JetsonAvoidance :  public rclcpp::Node
     int _sensor_address;
     int _i2c_bus{1};
     int _obs_array_offset{0};
+    std::string _frame_id{"laser_frame"};
 };
 
 void JetsonAvoidance::SensorInit()
@@ -307,12 +309,12 @@ void JetsonAvoidance::DistanceReadCB() {
       }
    
       // Place the results in the array
-      obs.ranges[distance_indx + _obs_array_offset] = static_cast<float>(distance_val) * cm_to_m;
+      obs.ranges[distance_indx] = static_cast<float>(distance_val) * cm_to_m;
     
     } // End for
 
     obs.header.stamp = this->get_clock()->now(); 
-    obs.header.frame_id = "laser_frame"; 
+    obs.header.frame_id = _frame_id; 
 
     _obs_distance_msg->publish(obs);
 

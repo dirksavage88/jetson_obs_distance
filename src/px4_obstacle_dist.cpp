@@ -20,9 +20,9 @@ class PX4ObstacleDist: public rclcpp::Node {
   
     // Subscriptions
     _front_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/front/obstacle_distance", qos, std::bind(&PX4ObstacleDist::FrontDistanceCB, this, _1));
-    _right_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/right/obstacle_distance", qos, std::bind(&PX4ObstacleDist::FrontDistanceCB, this, _1));
-    _rear_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/rear/obstacle_distance", qos, std::bind(&PX4ObstacleDist::FrontDistanceCB, this, _1));
-    _left_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/left/obstacle_distance", qos, std::bind(&PX4ObstacleDist::FrontDistanceCB, this, _1));
+    _right_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/right/obstacle_distance", qos, std::bind(&PX4ObstacleDist::RightDistanceCB, this, _1));
+    _rear_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/rear/obstacle_distance", qos, std::bind(&PX4ObstacleDist::RearDistanceCB, this, _1));
+    _left_laser_subscription = this->create_subscription<sensor_msgs::msg::LaserScan>("/left/obstacle_distance", qos, std::bind(&PX4ObstacleDist::LeftDistanceCB, this, _1));
     timer_cb_group_ = nullptr;
     // Publish to the px4 obstacle map only at 2hz, since sensor data is 5hz
     auto timer_ptr_ = this->create_wall_timer(std::chrono::milliseconds(500), std::bind(&PX4ObstacleDist::SendDistance, this));
